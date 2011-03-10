@@ -1,0 +1,15 @@
+--- kernel/resource.c.orig	2009-07-28 12:23:57.000000000 +0200
++++ kernel/resource.c	2009-07-28 12:26:59.000000000 +0200
+@@ -590,9 +590,10 @@
+ 
+ 	write_unlock(&resource_lock);
+ 
+-	printk(KERN_WARNING "Trying to free nonexistent resource "
++	/* STSDK - FAE/STAPIREF_COMPAT - Remove this trace */
++	/*printk(KERN_WARNING "Trying to free nonexistent resource "
+ 		"<%016llx-%016llx>\n", (unsigned long long)start,
+-		(unsigned long long)end);
++		(unsigned long long)end);*/
+ }
+ EXPORT_SYMBOL(__release_region);
+ 

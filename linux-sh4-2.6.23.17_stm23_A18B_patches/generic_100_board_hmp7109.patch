@@ -1,0 +1,360 @@
+--- arch/sh/Kconfig.orig	2009-02-26 10:36:38.000000000 +0800
++++ arch/sh/Kconfig	2009-02-26 11:44:25.000000000 +0800
+@@ -652,6 +652,14 @@
+ 	  Select MB839 if configuring for an
+ 	  STMicroelectronics STi7105 MB839 Reference Board.
+ 
++# STSDK - FAE/STAPIREF_COMPAT - Add HMP board support
++config SH_ST_HMP
++	bool "HMP: STx7109 Reference board"
++	depends on CPU_SUBTYPE_STB7100
++	help
++	  Select HMP reference board if configuring for an	
++	  HMP board
++
+ comment "ST Peripheral Boards"
+ 
+ config SH_ST_DB641
+--- include/asm-sh/hmp/coproc.h.orig	1970-01-01 08:00:00.000000000 +0800
++++ include/asm-sh/hmp/coproc.h	2009-02-26 10:37:10.000000000 +0800
+@@ -0,0 +1,13 @@
++/* ------------------------------------------------------------------------
++ *
++ *  HW dependent actions: STb7100 platform
++ */
++
++#define N_COPROC        2
++
++#define COPR_RAM_START	 	0x4000000	/* ST231 LMI RAM base address */
++
++#define SYSCON_REGS_BASE        P2SEGADDR(0x19001000)
++#define SYSCFG_09		(SYSCON_REGS_BASE + 0x124)
++#define SYSCFG_BOOT_REG(x)	(SYSCON_REGS_BASE + (x ? 0x168 : 0x170))
++#define SYSCFG_RESET_REG(x)	(SYSCON_REGS_BASE + (x ? 0x16c : 0x174))
+--- include/asm-sh/hmp/st40_ide.h.orig	1970-01-01 08:00:00.000000000 +0800
++++ include/asm-sh/hmp/st40_ide.h	2009-02-26 10:37:10.000000000 +0800
+@@ -0,0 +1,51 @@
++/*
++ * include/asm-sh/mb442/st40_ide.h
++ *
++ * This file contains all the definitions to support
++ * the IDE interface on mb442 board.
++ * IDE is mapped into EMI bank3.
++ */
++
++/* STb7100 only has one hw interface */
++#undef MAX_HWIFS
++#define MAX_HWIFS       1
++
++/* The ATA base address. This is the base of EMI bank 3. */
++#define ATA_ADDRESS           0xA2800000
++
++/* The ATA data base address offset. It is used to map
++ * all the ide registers on the hwif interface
++ * starting from this offset.
++ */
++#define ATA_DATA_OFFS_ADDRESS	0x00200000
++
++/* The ide registers offset. Registers will be stored into
++ * the hwif interface with a costant offset starting from
++ * the ATA data register address.
++ */
++#define REG_OFFSET		0x20000
++
++/* Only the control register has a different offset. */
++#define CTRL_REG_OFFSET		-0x40000
++
++/* ATA IRQ number */
++#define ATA_IRQ			IRL1_IRQ
++
++/* ide_enable does nothing because there is no external hardware to configure */
++#define ide_enable()
++
++/* hddi_reset does nothing for stb7100, because it does not have a HDDI interface. */
++#define hddi_reset()
++
++/* hddi_set_pio_timings does nothing for mb411, because it has not an HDDI
++ * interface and PIO timings are setted into the EMI bank3 (PIO4).
++ */
++#define hddi_set_pio_timings(rate)
++
++/* ide_ack_intr returns 1 when invoked.
++ * It is needed by the ide_intr function.
++ */
++#define ide_ack_intr(hwif)	1
++
++/* DMA in not supported for mb411 board, so hddi_setup_dma does nothing. */
++#define hddi_setup_dma(interface, address, offset)
+--- arch/sh/Makefile.orig	2009-02-26 10:36:38.000000000 +0800
++++ arch/sh/Makefile	2009-02-26 11:47:24.000000000 +0800
+@@ -151,6 +151,8 @@
+ machdir-$(CONFIG_SH_ST_MB704)			+= st/mb704
+ machdir-$(CONFIG_SH_ST_PDK7105)			+= st/pdk7105
+ machdir-$(CONFIG_SH_ST_MB839)			+= st/mb839
++# STSDK - FAE/STAPIREF_COMPAT - Add HMP board configuration
++machdir-$(CONFIG_SH_ST_HMP)			    += st/hmp
+ 
+ incdir-y	:= $(notdir $(firstword $(machdir-y)))
+ 
+--- arch/sh/boards/st/hmp/mach.c.orig	1970-01-01 08:00:00.000000000 +0800
++++ arch/sh/boards/st/hmp/mach.c	2009-02-26 12:53:50.000000000 +0800
+@@ -0,0 +1,60 @@
++/*
++ * arch/sh/boards/st/hmp/mach.c
++ *
++ * Copyright (C) 2005 STMicroelectronics Limited
++ * Author: Stuart Menefy (stuart.menefy@st.com)
++ *
++ * May be copied or modified under the terms of the GNU General Public
++ * License.  See linux/COPYING for more information.
++ *
++ * Machine vector for the STMicroelectronics STb7100 Reference board.
++ */
++
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <asm/system.h>
++#include <asm/io.h>
++#include <asm/machvec.h>
++#include <asm/irq-stb7100.h>
++
++static void __iomem *hmp_ioport_map(unsigned long port, unsigned int size)
++{
++#ifdef CONFIG_BLK_DEV_ST40IDE
++	/*
++	 * The IDE driver appears to use memory addresses with IO port
++	 * calls. This needs fixing.
++	 */
++	return (void __iomem *)port;
++#endif
++
++	/* However picking somewhere safe isn't as easy as you might think.
++	 * I used to use external ROM, but that can cause problems if you are
++	 * in the middle of updating Flash. So I'm now using the processor core
++	 * version register, which is guaranted to be available, and non-writable.
++	 */
++	return (void __iomem *)CCN_PVR;
++}
++
++static void __init hmp_init_irq(void)
++{
++	/* enable individual interrupt mode for externals */
++	plat_irq_setup_pins(IRQ_MODE_IRQ);
++
++	/* Set the ILC to route external interrupts to the the INTC */
++	/* Outputs 0-3 are the interrupt pins, 4-7 are routed to the INTC */
++	/* Inputs sys-irq2 and 3 are unused (pulled high) */
++	ilc_route_external(ILC_EXT_IRQ0, 4, 0);		/* SMC Ethernet */
++	ilc_route_external(ILC_EXT_IRQ1, 5, 0);		/* ATA */
++	ilc_route_external(ILC_EXT_IRQ2, 6, 0);		/* Unused */
++	ilc_route_external(ILC_EXT_MDINT, 7, 0);	/* STe100 PHY */
++}
++
++void __init hmp_setup(char**);
++
++static struct sh_machine_vector mv_hmp __initmv = {
++	.mv_name		= "STb7100 Reference board",
++	.mv_setup		= hmp_setup,
++	.mv_nr_irqs		= NR_IRQS,
++	.mv_init_irq		= hmp_init_irq,
++	.mv_ioport_map		= hmp_ioport_map,
++};
+--- arch/sh/boards/st/hmp/Makefile.orig	1970-01-01 08:00:00.000000000 +0800
++++ arch/sh/boards/st/hmp/Makefile	2009-02-26 10:36:37.000000000 +0800
+@@ -0,0 +1,5 @@
++#
++# Makefile for STMicroelectronics STb7100 Reference board
++#
++
++obj-y := setup.o mach.o
+--- arch/sh/boards/st/hmp/setup.c.orig	1970-01-01 08:00:00.000000000 +0800
++++ arch/sh/boards/st/hmp/setup.c	2009-02-26 14:15:14.558435592 +0800
+@@ -0,0 +1,188 @@
++/*
++ * arch/sh/boards/st/hmp/setup.c
++ *
++ * Copyright (C) 2005 STMicroelectronics Limited
++ * Author: Stuart Menefy (stuart.menefy@st.com)
++ *
++ * May be copied or modified under the terms of the GNU General Public
++ * License.  See linux/COPYING for more information.
++ *
++ * STMicroelectronics STb7100 Reference board support.
++ */
++
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/stm/pio.h>
++#include <linux/stm/soc.h>
++#include <linux/spi/spi.h>
++#include <linux/delay.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/physmap.h>
++#include <linux/mtd/partitions.h>
++#include <linux/phy.h>
++#include <linux/lirc.h>
++#include <asm/irl.h>
++
++static int ascs[2] __initdata = { 2, 3 };
++
++void __init hmp_setup(char** cmdline_p)
++{
++	printk("STMicroelectronics STb7100 Reference board initialisation\n");
++
++	stx7100_early_device_init();
++	stb7100_configure_asc(ascs, 2, 0);
++}
++
++static struct plat_stm_pwm_data pwm_private_info = {
++	.flags		= PLAT_STM_PWM_OUT1,
++};
++
++static struct plat_ssc_data ssc_private_info = {
++	.capability  =
++    /* ssc1 is for I2C1 bus,now DUAL 297E ok! 
++       see bugzilla#4969 and #4334 */
++		ssc0_has(SSC_I2C_CAPABILITY) |
++		ssc1_has(SSC_I2C_CAPABILITY) |
++		ssc2_has(SSC_I2C_CAPABILITY),
++};
++
++static struct resource smc91x_resources[] = {
++	[0] = {
++		.start	= 0x02000300,
++		.end	= 0x02000300 + 0xff,
++		.flags	= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start	= IRL0_IRQ,
++		.end	= IRL0_IRQ,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++static struct platform_device smc91x_device = {
++	.name		= "smc91x",
++	.id		= 0,
++	.num_resources	= ARRAY_SIZE(smc91x_resources),
++	.resource	= smc91x_resources,
++};
++
++static struct mtd_partition mtd_parts_table[3] = {
++	{
++		.name = "Boot firmware",
++		.size = 0x00040000,
++		.offset = 0x00000000,
++	}, {
++		.name = "Kernel",
++		.size = 0x00100000,
++		.offset = 0x00040000,
++	}, {
++		.name = "Root FS",
++		.size = MTDPART_SIZ_FULL,
++		.offset = 0x00140000,
++	}
++};
++
++static struct stpio_pin *vpp_pio;
++static void set_vpp(struct map_info *info, int enable)
++{
++	stpio_set_pin(vpp_pio, enable);
++}
++
++static struct physmap_flash_data physmap_flash_data = {
++	.width		= 2,
++	.set_vpp	= set_vpp,
++	.nr_parts	= ARRAY_SIZE(mtd_parts_table),
++	.parts		= mtd_parts_table
++};
++
++static struct resource physmap_flash_resource = {
++	.start		= 0x00000000,
++	.end		= 0x00800000 - 1,
++	.flags		= IORESOURCE_MEM,
++};
++
++static struct platform_device physmap_flash = {
++	.name		= "physmap-flash",
++	.id		= -1,
++	.dev		= {
++		.platform_data	= &physmap_flash_data,
++	},
++	.num_resources	= 1,
++	.resource	= &physmap_flash_resource,
++};
++
++static struct stpio_pin *phy_reset_pin;
++
++static int hmp_phy_reset(void* bus)
++{
++	stpio_set_pin(phy_reset_pin, 1);
++	udelay(1);
++	stpio_set_pin(phy_reset_pin, 0);
++	udelay(1);
++	stpio_set_pin(phy_reset_pin, 1);
++  stpio_free_pin(phy_reset_pin);
++
++	return 1;
++}
++
++static struct plat_stmmacphy_data phy_private_data = {
++	.bus_id = 0,
++	.phy_addr = 14,
++	.phy_mask = 1,
++	.interface = PHY_INTERFACE_MODE_MII,
++	.phy_reset = &hmp_phy_reset,
++};
++
++static struct platform_device hmp_phy_device = {
++	.name		= "stmmacphy",
++	.id		= 0,
++	.num_resources	= 1,
++	.resource	= (struct resource[]) {
++                {
++			.name	= "phyirq",
++			.start	= IRL3_IRQ,
++			.end	= IRL3_IRQ,
++			.flags	= IORESOURCE_IRQ,
++		},
++	},
++	.dev = {
++		.platform_data = &phy_private_data,
++	 }
++};
++
++static struct platform_device *hmp_devices[] __initdata = {
++	&smc91x_device,
++	&physmap_flash,
++	&hmp_phy_device,
++};
++
++/* Configuration based on Futarque-RC signals train. */
++lirc_scd_t lirc_scd = {
++	.code = 0x3FFFC028,
++	.codelen = 0x1e,
++	.alt_codelen = 0,
++	.nomtime = 0x1f4,
++	.noiserecov = 0,
++};
++
++static int __init device_init(void)
++{
++	struct stpio_pin *smc91x_reset;
++
++	stx7100_configure_sata();
++	stx7100_configure_pwm(&pwm_private_info);
++	stx7100_configure_ssc(&ssc_private_info);
++	stx7100_configure_usb();
++	stx7100_configure_lirc(&lirc_scd);
++	stx7100_configure_pata(3, 1, IRL1_IRQ);
++
++	phy_reset_pin = stpio_request_set_pin(5, 3, "ste100p_reset",
++					      STPIO_OUT, 1);
++
++	stx7100_configure_ethernet(0, 0, 0);
++
++	return platform_add_devices(hmp_devices,
++				    ARRAY_SIZE(hmp_devices));
++}
++
++device_initcall(device_init);

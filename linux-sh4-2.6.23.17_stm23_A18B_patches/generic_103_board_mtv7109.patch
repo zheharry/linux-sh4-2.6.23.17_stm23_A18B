@@ -1,0 +1,332 @@
+--- arch/sh/Kconfig.orig	2009-04-08 22:52:54.000000000 +0200
++++ arch/sh/Kconfig	2009-04-08 22:52:09.000000000 +0200
+@@ -676,6 +676,14 @@
+ 	  Select IDTV7109_7109 Reference if configuring for an
+ 	  IDTV7109_7109 Reference Board.
+ 	  
++# STSDK - FAE/STAPIREF_COMPAT - Add MTV7109_7109 board support
++config SH_MTV7109_7109    
++	bool "MTV7109_7109 Reference board"
++	depends on CPU_SUBTYPE_STB7100
++	help
++	  Select MTV7109_7109 Reference if configuring for an
++	  MTV7109_7109 Reference Board.
++
+ comment "ST Peripheral Boards"
+ 
+ config SH_ST_DB641
+--- include/asm-sh/mtv109/coproc.h.ori	1970-01-01 01:00:00.000000000 +0100
++++ include/asm-sh/mtv7109/coproc.h	2008-05-22 14:11:23.000000000 +0200
+@@ -0,0 +1,13 @@
++/* ------------------------------------------------------------------------
++ *
++ *  HW dependent actions: MTV7109 platform
++ */
++
++#define N_COPROC        2
++
++#define COPR_RAM_START	 	0x4000000	/* ST231 LMI RAM base address */
++
++#define SYSCON_REGS_BASE        P2SEGADDR(0x19001000)
++#define SYSCFG_09		(SYSCON_REGS_BASE + 0x124)
++#define SYSCFG_BOOT_REG(x)	(SYSCON_REGS_BASE + (x ? 0x168 : 0x170))
++#define SYSCFG_RESET_REG(x)	(SYSCON_REGS_BASE + (x ? 0x16c : 0x174))
+--- arch/sh/Makefile.orig	2009-04-08 22:47:53.000000000 +0200
++++ arch/sh/Makefile	2009-04-08 22:49:01.000000000 +0200
+@@ -157,6 +157,8 @@
+ machdir-$(CONFIG_SH_ST_SAT7111)			+= st/sat7111 st/common
+ # STSDK - FAE/STAPIREF_COMPAT - Add IDTV7109 board configuration
+ machdir-$(CONFIG_SH_ST_IDTV7109)		+= st/idtv7109
++# STSDK - FAE/STAPIREF_COMPAT - Add MTV7109 board configuration
++machdir-$(CONFIG_SH_MTV7109_7109)		+= st/mtv7109
+ 
+ incdir-y	:= $(notdir $(firstword $(machdir-y)))
+ 
+--- arch/sh/boards/st/mtv7109/mach.c.ori	1970-01-01 01:00:00.000000000 +0100
++++ arch/sh/boards/st/mtv7109/mach.c	2008-07-16 14:31:57.000000000 +0200
+@@ -0,0 +1,60 @@
++/*
++ * arch/sh/boards/st/mtv7109/mach.c
++ *
++ * Copyright (C) 2005 STMicroelectronics Limited
++ * Author: Stuart Menefy (stuart.menefy@st.com)
++ *
++ * May be copied or modified under the terms of the GNU General Public
++ * License.  See linux/COPYING for more information.
++ *
++ * Machine vector for the STMicroelectronics STb7100 Reference board.
++ */
++
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <asm/system.h>
++#include <asm/io.h>
++#include <asm/machvec.h>
++#include <asm/irq-stb7100.h>
++
++static void __iomem *mtv7109_ioport_map(unsigned long port, unsigned int size)
++{
++#ifdef CONFIG_BLK_DEV_ST40IDE
++	/*
++	 * The IDE driver appears to use memory addresses with IO port
++	 * calls. This needs fixing.
++	 */
++	return (void __iomem *)port;
++#endif
++
++	/* However picking somewhere safe isn't as easy as you might think.
++	 * I used to use external ROM, but that can cause problems if you are
++	 * in the middle of updating Flash. So I'm now using the processor core
++	 * version register, which is guaranted to be available, and non-writable.
++	 */
++	return (void __iomem *)CCN_PVR;
++}
++
++static void __init mtv7109_init_irq(void)
++{
++	/* enable individual interrupt mode for externals */
++	plat_irq_setup_pins(IRQ_MODE_IRQ);
++
++	/* Set the ILC to route external interrupts to the the INTC */
++	/* Outputs 0-3 are the interrupt pins, 4-7 are routed to the INTC */
++	/* Inputs sys-irq2 and 3 are unused (pulled high) */
++	ilc_route_external(ILC_EXT_IRQ0, 4, 0);		/* SMC Ethernet */
++	ilc_route_external(ILC_EXT_IRQ1, 5, 0);		/* ATA */
++	ilc_route_external(ILC_EXT_IRQ2, 6, 0);		/* Unused */
++	ilc_route_external(ILC_EXT_MDINT, 7, 0);	/* STe100 PHY */
++}
++
++void __init mtv7109_setup(char**);
++
++static struct sh_machine_vector mv_mtv7109 __initmv = {
++	.mv_name		= "STb7100 Reference board",
++	.mv_setup		= mtv7109_setup,
++	.mv_nr_irqs		= NR_IRQS,
++	.mv_init_irq		= mtv7109_init_irq,
++	.mv_ioport_map		= mtv7109_ioport_map,
++};
+
+--- arch/sh/boards/st/mtv7109/Makefile.ori	1970-01-01 01:00:00.000000000 +0100
++++ arch/sh/boards/st/mtv7109/Makefile	2008-07-16 14:31:57.000000000 +0200
+@@ -0,0 +1,5 @@
++#
++# Makefile for STMicroelectronics STb7100 Reference board
++#
++
++obj-y := setup.o mach.o
+--- arch/sh/kernel/cpu/sh4/setup-stb7100.c.orig	2009-07-03 07:38:33.000000000 +0200
++++ arch/sh/kernel/cpu/sh4/setup-stb7100.c	2009-07-28 15:22:37.000000000 +0200
+@@ -297,7 +297,11 @@
+ static char spi_st[] = "spi_st_ssc";
+ static struct platform_device stssc_devices[] = {
+ 	STSSC_DEVICE(0x18040000, 119, 2, 0, 1, 2),
++#ifndef CONFIG_SH_MTV7109_7109
+ 	STSSC_DEVICE(0x18041000, 118, 3, 0, 1, 2),
++#else
++	STSSC_DEVICE(0x18041000, 118, 0xff, 0xff, 0xff, 0xff),
++#endif
+ 	STSSC_DEVICE(0x18042000, 117, 4, 0, 1, 0xff),
+ };
+ 
+@@ -691,7 +695,11 @@
+ 		STPIO_ALT_OUT, STPIO_IN, STPIO_IN, STPIO_ALT_OUT), /* oe pin: 6 */
+ 	STASC_DEVICE(0x18032000, 121, -1, -1, 4, 3, 2, 4, 5,
+ 		STPIO_ALT_OUT, STPIO_IN, STPIO_IN, STPIO_ALT_OUT),
++#if defined CONFIG_SH_MTV7109_7109 
++	STASC_DEVICE(0x18033000, 120, -1, -1, 5, 0, 1, -1, -1,
++#else
+ 	STASC_DEVICE(0x18033000, 120, -1, -1, 5, 0, 1, 2, 3,
++#endif
+ 		STPIO_ALT_OUT, STPIO_IN, STPIO_IN, STPIO_ALT_OUT),
+ };
+ 
+--- arch/sh/boards/st/mtv7109/setup.c	1970-01-01 01:00:00.000000000 +0100
++++ arch/sh/boards/st/mtv7109/setup.c.ori	2008-09-16 16:11:02.000000000 +0200
+@@ -0,0 +1,187 @@
++/*
++ * arch/sh/boards/st/mtv7109/setup.c
++ *
++ * Copyright (C) 2005 STMicroelectronics Limited
++ * Author: Stuart Menefy (stuart.menefy@st.com)
++ *
++ * May be copied or modified under the terms of the GNU General Public
++ * License.  See linux/COPYING for more information.
++ *
++ * STMicroelectronics MTV7109 board support.
++ */
++
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/stm/pio.h>
++#include <linux/stm/soc.h>
++#include <linux/spi/spi.h>
++#include <linux/delay.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/physmap.h>
++#include <linux/mtd/partitions.h>
++#include <linux/phy.h>
++#include <linux/lirc.h>
++#include <asm/irl.h>
++
++static int ascs[2] __initdata = { 2, 3 };
++
++void __init mtv7109_setup(char** cmdline_p)
++{
++	printk("STMicroelectronics STb7100 Reference board initialisation\n");
++
++	stx7100_early_device_init();
++	stb7100_configure_asc(ascs, 2, 0);
++}
++
++static struct plat_stm_pwm_data pwm_private_info = {
++	.flags		= PLAT_STM_PWM_OUT1,
++};
++
++static struct plat_ssc_data ssc_private_info = {
++	.capability  =
++		ssc0_has(SSC_I2C_CAPABILITY) |
++		ssc1_has(SSC_I2C_CAPABILITY) |
++		ssc2_has(SSC_I2C_CAPABILITY),
++};
++
++static struct resource smc91x_resources[] = {
++	[0] = {
++		.start	= 0x02000300,
++		.end	= 0x02000300 + 0xff,
++		.flags	= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start	= IRL0_IRQ,
++		.end	= IRL0_IRQ,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++static struct platform_device smc91x_device = {
++	.name		= "smc91x",
++	.id		= 0,
++	.num_resources	= ARRAY_SIZE(smc91x_resources),
++	.resource	= smc91x_resources,
++};
++
++static struct mtd_partition mtd_parts_table[3] = {
++	{
++		.name = "Boot firmware",
++		.size = 0x00040000,
++		.offset = 0x00000000,
++	}, {
++		.name = "Kernel",
++		.size = 0x00100000,
++		.offset = 0x00040000,
++	}, {
++		.name = "Root FS",
++		.size = MTDPART_SIZ_FULL,
++		.offset = 0x00140000,
++	}
++};
++
++static struct stpio_pin *vpp_pio;
++static void set_vpp(struct map_info *info, int enable)
++{
++	stpio_set_pin(vpp_pio, enable);
++}
++
++static struct physmap_flash_data physmap_flash_data = {
++	.width		= 2,
++	.set_vpp	= set_vpp,
++	.nr_parts	= ARRAY_SIZE(mtd_parts_table),
++	.parts		= mtd_parts_table
++};
++
++static struct resource physmap_flash_resource = {
++	.start		= 0x00000000,
++	.end		= 0x00800000 - 1,
++	.flags		= IORESOURCE_MEM,
++};
++
++static struct platform_device physmap_flash = {
++	.name		= "physmap-flash",
++	.id		= -1,
++	.dev		= {
++		.platform_data	= &physmap_flash_data,
++	},
++	.num_resources	= 1,
++	.resource	= &physmap_flash_resource,
++};
++
++static struct stpio_pin *phy_reset_pin;
++
++static int mtv7109_phy_reset(void* bus)
++{
++	stpio_set_pin(phy_reset_pin, 1);
++	udelay(1);
++	stpio_set_pin(phy_reset_pin, 0);
++	udelay(1);
++	stpio_set_pin(phy_reset_pin, 1);
++
++	return 1;
++}
++
++static struct plat_stmmacphy_data phy_private_data = {
++	.bus_id = 0,
++	.phy_addr = 14,
++	.phy_mask = 1,
++	.interface = PHY_INTERFACE_MODE_MII,
++	.phy_reset = &mtv7109_phy_reset,
++};
++
++static struct platform_device mtv7109_phy_device = {
++	.name		= "stmmacphy",
++	.id		= 0,
++	.num_resources	= 1,
++	.resource	= (struct resource[]) {
++                {
++			.name	= "phyirq",
++			.start	= IRL3_IRQ,
++			.end	= IRL3_IRQ,
++			.flags	= IORESOURCE_IRQ,
++		},
++	},
++	.dev = {
++		.platform_data = &phy_private_data,
++	 }
++};
++
++static struct platform_device *mtv7109_devices[] __initdata = {
++	&smc91x_device,
++	&physmap_flash,
++	&mtv7109_phy_device,
++};
++
++/* Configuration based on Futarque-RC signals train. */
++lirc_scd_t lirc_scd = {
++	.code = 0x3FFFC028,
++	.codelen = 0x1e,
++	.alt_codelen = 0,
++	.nomtime = 0x1f4,
++	.noiserecov = 0,
++};
++
++static int __init device_init(void)
++{
++	unsigned 		sysconf;
++	int			ret;
++	struct stpio_pin *pin;
++	
++	stx7100_configure_sata();
++	stx7100_configure_pwm(&pwm_private_info);
++	stx7100_configure_ssc(&ssc_private_info);
++	stx7100_configure_usb();
++	stx7100_configure_lirc(&lirc_scd);
++	stx7100_configure_pata(3, 1, IRL0_IRQ);
++
++#if defined CONFIG_STMMAC_ETH
++	phy_reset_pin = stpio_request_set_pin(3, 7, "ste100p_reset",
++					      STPIO_OUT, 1);
++	stx7100_configure_ethernet(0, 0, 0);
++#endif
++	ret = platform_add_devices(mtv7109_devices,  ARRAY_SIZE(mtv7109_devices));
++	return ret;
++}
++
++device_initcall(device_init);
